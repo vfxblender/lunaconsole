@@ -96,18 +96,17 @@
     </section>
   </div>
 
-  <!-- PATCHED SCRIPT: pinned version + same-origin worker + custom app-config -->
+  <!-- Inline config version -->
   <script type="module">
-    // 1) Pin to a known-good WebLLM version
     import * as webllm from "https://esm.run/@mlc-ai/web-llm@0.2.79";
 
-    // 2) Persona (edit to taste)
+    // Persona
     const BASE_SYSTEM_PROMPT = `You are LUNA: a scientist's consciousness fractured inside the Infinity Matrix.
 Speak tersely, like a calm mission operator with a touch of glitchy poetry.
 Use short paragraphs and occasional bullet points. Stay in-universe unless asked for dev help.`;
     document.getElementById('persona').textContent = BASE_SYSTEM_PROMPT;
 
-    // 3) DOM refs
+    // DOM refs
     const modelSel = document.getElementById('model');
     const loadBtn  = document.getElementById('load');
     const statusEl = document.getElementById('status');
@@ -116,19 +115,7 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
     const sendBtn  = document.getElementById('send');
     const diagEl   = document.getElementById('diag');
 
-    // 4) Helpers
-    function addLine(text, cls="line sys"){
-      const div = document.createElement('div');
-      div.className = cls; div.textContent = text; log.appendChild(div);
-      log.scrollTop = log.scrollHeight;
-    }
-    function typeAppend(cls){
-      const div = document.createElement('div');
-      div.className = cls; div.textContent = ""; log.appendChild(div);
-      return (chunk)=>{ div.textContent += chunk; log.scrollTop = log.scrollHeight; };
-    }
-
-    // 5) Diagnostics
+    // Diagnostics
     function renderDiag() {
       diagEl.textContent = [
         'crossOriginIsolated: ' + (window.crossOriginIsolated ? 'true' : 'false'),
@@ -141,34 +128,32 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
       statusEl.textContent = "WebGPU not available — try latest Chrome/Edge (desktop).";
     }
 
-    // 6) Load custom app-config (points models to your /hf proxy)
-    let appConfig = null;
-    try {
-      const res = await fetch('/app-config.json', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      appConfig = await res.json();
-    } catch (e) {
-      console.error('Failed to load app-config.json', e);
-      statusEl.textContent = 'Failed to load app-config.json';
-    }
+    // === INLINE CONFIG ===
+    const appConfig = {
+      "model_list": [
+        {
+          "model_id": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+          "model_url": "/hf/mlc-ai/web-llm-models/resolve/main/Qwen2.5-0.5B-Instruct-q4f16_1-MLC/",
+          "required_features": ["wasm"]
+        }
+      ]
+    };
 
-    // 7) Populate model list from app-config
-    const availableModels = (appConfig?.model_list || []).map(m => m.model_id);
-    function pickDefaultModel(){
-      return availableModels[0]; // first in your config
-    }
+    // Populate models
+    const availableModels = appConfig.model_list.map(m => m.model_id);
+    function pickDefaultModel(){ return availableModels[0]; }
     function populateModels(){
       modelSel.innerHTML = "";
-      (appConfig?.model_list || []).forEach(m => {
+      appConfig.model_list.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.model_id; opt.textContent = m.model_id;
         modelSel.appendChild(opt);
       });
-      if (availableModels.length) modelSel.value = pickDefaultModel();
+      modelSel.value = pickDefaultModel();
     }
     populateModels();
 
-    // 8) Engine + chat wiring
+    // Engine state
     let engine = null;
     let history = [];
     const MAX_HISTORY = 8;
@@ -179,23 +164,16 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
     };
 
     async function loadModel(){
-      if (!availableModels.length) {
-        statusEl.textContent = 'No models in app-config.json';
-        return;
-      }
       const selectedModel = modelSel.value;
       statusEl.textContent = `Loading ${selectedModel}… (first run may take a while)`;
       loadBtn.disabled = true; sendBtn.disabled = true;
       try{
-        // Same-origin module worker avoids cross-origin restrictions
         const w = new Worker("/webllm-worker.js", { type: "module" });
-
         engine = await webllm.CreateMLCEngine(selectedModel, {
           worker: w,
           initProgressCallback,
-          appConfig // <- custom config with /hf proxy URLs
+          appConfig
         });
-
         statusEl.textContent = `Loaded: ${selectedModel}`;
         addLine(`LUNA core online ∷ ${selectedModel}`, 'line sys');
       }catch(err){
@@ -205,6 +183,17 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
       }finally{
         loadBtn.disabled = false; sendBtn.disabled = false; inp.focus();
       }
+    }
+
+    function addLine(text, cls="line sys"){
+      const div = document.createElement('div');
+      div.className = cls; div.textContent = text; log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+    function typeAppend(cls){
+      const div = document.createElement('div');
+      div.className = cls; div.textContent = ""; log.appendChild(div);
+      return (chunk)=>{ div.textContent += chunk; log.scrollTop = log.scrollHeight; };
     }
 
     function help(){
@@ -250,10 +239,9 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
     sendBtn.addEventListener('click', send);
     inp.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
 
-    // Optional: auto-load first model
+    // Auto-load first model
     loadModel();
 
-    // Welcome
     addLine('LUNA Console (WebGPU) ready. Type /help. First load may be slow; cached after.', 'line sys');
   </script>
 </body>
