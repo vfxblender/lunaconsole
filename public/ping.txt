@@ -1,0 +1,1 @@
+ok $(date -u +%F_%T) UTC
