@@ -87,33 +87,36 @@
         <p id="persona" class="sys"></p>
       </div>
     </section>
+
+    <section class="card">
+      <div class="hd">Diagnostics</div>
+      <div class="bd">
+        <div id="diag" class="sys"></div>
+      </div>
+    </section>
   </div>
 
-  <!-- PATCHED SCRIPT: pinned version + same-origin worker -->
+  <!-- PATCHED SCRIPT: pinned version + same-origin worker + custom app-config -->
   <script type="module">
-    // Pin to a known-good version
+    // 1) Pin to a known-good WebLLM version
     import * as webllm from "https://esm.run/@mlc-ai/web-llm@0.2.79";
 
-    // === Persona (edit to taste) ===
+    // 2) Persona (edit to taste)
     const BASE_SYSTEM_PROMPT = `You are LUNA: a scientist's consciousness fractured inside the Infinity Matrix.
 Speak tersely, like a calm mission operator with a touch of glitchy poetry.
 Use short paragraphs and occasional bullet points. Stay in-universe unless asked for dev help.`;
     document.getElementById('persona').textContent = BASE_SYSTEM_PROMPT;
 
-    // === DOM refs ===
+    // 3) DOM refs
     const modelSel = document.getElementById('model');
     const loadBtn  = document.getElementById('load');
     const statusEl = document.getElementById('status');
     const log      = document.getElementById('log');
     const inp      = document.getElementById('inp');
     const sendBtn  = document.getElementById('send');
+    const diagEl   = document.getElementById('diag');
 
-    // Environment check
-    if (!('gpu' in navigator)) {
-      statusEl.textContent = "WebGPU not available — try latest Chrome/Edge (desktop).";
-    }
-
-    // Helpers
+    // 4) Helpers
     function addLine(text, cls="line sys"){
       const div = document.createElement('div');
       div.className = cls; div.textContent = text; log.appendChild(div);
@@ -125,22 +128,47 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
       return (chunk)=>{ div.textContent += chunk; log.scrollTop = log.scrollHeight; };
     }
 
-    // Model list from prebuilt config
-    const availableModels = webllm.prebuiltAppConfig.model_list.map(m => m.model_id);
+    // 5) Diagnostics
+    function renderDiag() {
+      diagEl.textContent = [
+        'crossOriginIsolated: ' + (window.crossOriginIsolated ? 'true' : 'false'),
+        'WebGPU: ' + (('gpu' in navigator) ? 'available' : 'missing'),
+        'Origin: ' + location.origin
+      ].join(' | ');
+    }
+    renderDiag();
+    if (!('gpu' in navigator)) {
+      statusEl.textContent = "WebGPU not available — try latest Chrome/Edge (desktop).";
+    }
+
+    // 6) Load custom app-config (points models to your /hf proxy)
+    let appConfig = null;
+    try {
+      const res = await fetch('/app-config.json', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      appConfig = await res.json();
+    } catch (e) {
+      console.error('Failed to load app-config.json', e);
+      statusEl.textContent = 'Failed to load app-config.json';
+    }
+
+    // 7) Populate model list from app-config
+    const availableModels = (appConfig?.model_list || []).map(m => m.model_id);
     function pickDefaultModel(){
-      const preferred = availableModels.find(m => /(?:0\.5B|1B|2B)/i.test(m));
-      return preferred || availableModels[0];
+      return availableModels[0]; // first in your config
     }
     function populateModels(){
       modelSel.innerHTML = "";
-      availableModels.forEach(id => {
+      (appConfig?.model_list || []).forEach(m => {
         const opt = document.createElement('option');
-        opt.value = id; opt.textContent = id; modelSel.appendChild(opt);
+        opt.value = m.model_id; opt.textContent = m.model_id;
+        modelSel.appendChild(opt);
       });
-      modelSel.value = pickDefaultModel();
+      if (availableModels.length) modelSel.value = pickDefaultModel();
     }
     populateModels();
 
+    // 8) Engine + chat wiring
     let engine = null;
     let history = [];
     const MAX_HISTORY = 8;
@@ -151,16 +179,21 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
     };
 
     async function loadModel(){
+      if (!availableModels.length) {
+        statusEl.textContent = 'No models in app-config.json';
+        return;
+      }
       const selectedModel = modelSel.value;
       statusEl.textContent = `Loading ${selectedModel}… (first run may take a while)`;
       loadBtn.disabled = true; sendBtn.disabled = true;
       try{
-        // IMPORTANT: use same-origin module worker (fixes cross-origin issues)
+        // Same-origin module worker avoids cross-origin restrictions
         const w = new Worker("/webllm-worker.js", { type: "module" });
 
         engine = await webllm.CreateMLCEngine(selectedModel, {
           worker: w,
-          initProgressCallback
+          initProgressCallback,
+          appConfig // <- custom config with /hf proxy URLs
         });
 
         statusEl.textContent = `Loaded: ${selectedModel}`;
@@ -173,8 +206,6 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
         loadBtn.disabled = false; sendBtn.disabled = false; inp.focus();
       }
     }
-
-    loadBtn.addEventListener('click', loadModel);
 
     function help(){
       addLine('/help — commands', 'line sys');
@@ -215,14 +246,15 @@ Use short paragraphs and occasional bullet points. Stay in-universe unless asked
       }
     }
 
+    loadBtn.addEventListener('click', loadModel);
     sendBtn.addEventListener('click', send);
     inp.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
 
-    // Optional auto-load default model
+    // Optional: auto-load first model
     loadModel();
 
+    // Welcome
     addLine('LUNA Console (WebGPU) ready. Type /help. First load may be slow; cached after.', 'line sys');
   </script>
 </body>
 </html>
-

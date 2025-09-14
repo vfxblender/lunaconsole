@@ -1,0 +1,9 @@
+{
+  "model_list": [
+    {
+      "model_id": "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+      "model_url": "/hf/mlc-ai/web-llm-models/resolve/main/Qwen2.5-0.5B-Instruct-q4f16_1-MLC/",
+      "required_features": ["wasm"]
+    }
+  ]
+}
