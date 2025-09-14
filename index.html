@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LUNA Console — In‑Browser (WebGPU)</title>
+  <title>LUNA Console — In-Browser (WebGPU)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&display=swap" rel="stylesheet">
@@ -26,8 +26,8 @@
     header{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
     .title{ font-weight:600; font-size:clamp(18px,3.5vw,28px); letter-spacing:.18em; text-transform:uppercase; filter:drop-shadow(0 0 6px var(--accent)) }
     .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
-    select, button, input[type="text"]{ 
-      background:#00160f; color:var(--fg); border:1px solid rgba(0,255,153,.35); border-radius:10px; 
+    select, button, input[type="text"]{
+      background:#00160f; color:var(--fg); border:1px solid rgba(0,255,153,.35); border-radius:10px;
       padding:10px 12px; outline:none; font-family:inherit; font-size:14px
     }
     button{ background:var(--accent); color:#013023; font-weight:700; cursor:pointer }
@@ -59,7 +59,7 @@
 <body>
   <div class="wrap">
     <header>
-      <div class="title">LUNA CONSOLE ∷ In‑Browser (WebGPU)</div>
+      <div class="title">LUNA CONSOLE ∷ In-Browser (WebGPU)</div>
       <div class="controls">
         <label for="model" style="opacity:.9">Model:</label>
         <select id="model"></select>
@@ -89,11 +89,15 @@
     </section>
   </div>
 
+  <!-- PATCHED SCRIPT: pinned version + same-origin worker -->
   <script type="module">
-    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+    // Pin to a known-good version
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm@0.2.79";
 
     // === Persona (edit to taste) ===
-    const BASE_SYSTEM_PROMPT = `You are LUNA: a scientist's consciousness fractured inside the Infinity Matrix.\nSpeak tersely, like a calm mission operator with a touch of glitchy poetry.\nUse short paragraphs and occasional bullet points. Stay in-universe unless asked for dev help.`;
+    const BASE_SYSTEM_PROMPT = `You are LUNA: a scientist's consciousness fractured inside the Infinity Matrix.
+Speak tersely, like a calm mission operator with a touch of glitchy poetry.
+Use short paragraphs and occasional bullet points. Stay in-universe unless asked for dev help.`;
     document.getElementById('persona').textContent = BASE_SYSTEM_PROMPT;
 
     // === DOM refs ===
@@ -104,12 +108,12 @@
     const inp      = document.getElementById('inp');
     const sendBtn  = document.getElementById('send');
 
-    // === Environment checks ===
+    // Environment check
     if (!('gpu' in navigator)) {
-      statusEl.textContent = "WebGPU not available — try latest Chrome/Edge/Firefox Nightly";
+      statusEl.textContent = "WebGPU not available — try latest Chrome/Edge (desktop).";
     }
 
-    // === Utilities ===
+    // Helpers
     function addLine(text, cls="line sys"){
       const div = document.createElement('div');
       div.className = cls; div.textContent = text; log.appendChild(div);
@@ -121,9 +125,8 @@
       return (chunk)=>{ div.textContent += chunk; log.scrollTop = log.scrollHeight; };
     }
 
-    // === Model list (pull from prebuilt config) ===
+    // Model list from prebuilt config
     const availableModels = webllm.prebuiltAppConfig.model_list.map(m => m.model_id);
-    // Prefer smaller models for browsers
     function pickDefaultModel(){
       const preferred = availableModels.find(m => /(?:0\.5B|1B|2B)/i.test(m));
       return preferred || availableModels[0];
@@ -138,8 +141,8 @@
     }
     populateModels();
 
-    let engine = null; // MLCEngine
-    let history = [];  // rolling context {role, content}
+    let engine = null;
+    let history = [];
     const MAX_HISTORY = 8;
 
     const initProgressCallback = (report) => {
@@ -152,12 +155,20 @@
       statusEl.textContent = `Loading ${selectedModel}… (first run may take a while)`;
       loadBtn.disabled = true; sendBtn.disabled = true;
       try{
-        engine = await webllm.CreateMLCEngine(selectedModel, { initProgressCallback });
+        // IMPORTANT: use same-origin module worker (fixes cross-origin issues)
+        const w = new Worker("/webllm-worker.js", { type: "module" });
+
+        engine = await webllm.CreateMLCEngine(selectedModel, {
+          worker: w,
+          initProgressCallback
+        });
+
         statusEl.textContent = `Loaded: ${selectedModel}`;
         addLine(`LUNA core online ∷ ${selectedModel}`, 'line sys');
       }catch(err){
+        console.error(err);
         statusEl.textContent = `Load failed`;
-        addLine(`Load error ∷ ${err.message}`, 'line err');
+        addLine(`Load error ∷ ${err?.message || String(err)}`, 'line err');
       }finally{
         loadBtn.disabled = false; sendBtn.disabled = false; inp.focus();
       }
@@ -171,7 +182,6 @@
       addLine('/system — show persona', 'line sys');
       addLine('/reload — reload model', 'line sys');
     }
-
     function clearLog(){ log.innerHTML = ''; }
 
     async function send(){
@@ -188,7 +198,6 @@
 
       const messages = [ { role:'system', content: BASE_SYSTEM_PROMPT }, ...history ];
       try{
-        // Streaming generation
         const chunks = await engine.chat.completions.create({ messages, stream:true });
         const append = typeAppend('line luna');
         let finalText = '';
@@ -196,12 +205,12 @@
           const delta = chunk.choices?.[0]?.delta?.content || '';
           if(delta){ append(delta); finalText += delta; }
         }
-        // Persist reply
         const full = await engine.getMessage();
         const replyText = full?.choices?.[0]?.message?.content ?? finalText;
         history.push({ role:'assistant', content: replyText });
         if(history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
       }catch(err){
+        console.error(err);
         addLine('Error ∷ ' + err.message, 'line err');
       }
     }
@@ -209,11 +218,11 @@
     sendBtn.addEventListener('click', send);
     inp.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
 
-    // Autoload default model on first visit (optional). Comment this out if you prefer manual load.
+    // Optional auto-load default model
     loadModel();
 
-    // Welcome
     addLine('LUNA Console (WebGPU) ready. Type /help. First load may be slow; cached after.', 'line sys');
   </script>
 </body>
 </html>
+
