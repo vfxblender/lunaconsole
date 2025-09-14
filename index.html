@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LUNA Console — In‑Browser (WebGPU)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;600&display=swap" rel="stylesheet">
+  <style>
+    :root{ --bg:#000; --fg:#b7ffc9; --muted:#6af79a; --accent:#00ff88; --link:#9bffd2; }
+    *{ box-sizing:border-box }
+    html,body{ height:100% }
+    body{
+      margin:0; background:var(--bg); color:var(--fg);
+      font:14px/1.6 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing:.02em; overflow-x:hidden;
+    }
+    /* light CRT + matrix vibes */
+    body:before, body:after{ content:""; position:fixed; inset:0; pointer-events:none; z-index:1 }
+    body:before{ background:radial-gradient(120% 90% at 50% -10%, rgba(0,255,153,.08), transparent 60%),
+                         radial-gradient(80% 60% at 50% 120%, rgba(0,0,0,.6), transparent 60%) }
+    body:after{ background:repeating-linear-gradient(0deg, rgba(0,255,153,.04) 0 2px, transparent 2px 4px); mix-blend-mode:overlay; opacity:.35 }
+
+    .wrap{ max-width:980px; margin:0 auto; padding:28px 18px 40px }
+    header{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
+    .title{ font-weight:600; font-size:clamp(18px,3.5vw,28px); letter-spacing:.18em; text-transform:uppercase; filter:drop-shadow(0 0 6px var(--accent)) }
+    .controls{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+    select, button, input[type="text"]{ 
+      background:#00160f; color:var(--fg); border:1px solid rgba(0,255,153,.35); border-radius:10px; 
+      padding:10px 12px; outline:none; font-family:inherit; font-size:14px
+    }
+    button{ background:var(--accent); color:#013023; font-weight:700; cursor:pointer }
+    button:disabled{ opacity:.6; cursor:progress }
+
+    .card{ margin:18px 0; border:1px solid rgba(0,255,153,.28); background:linear-gradient(180deg, rgba(0,64,32,.35), rgba(0,0,0,.2)); border-radius:12px }
+    .card .hd{ padding:10px 12px; font-weight:600; color:var(--link); letter-spacing:.12em }
+    .card .bd{ padding:12px }
+
+    .term{ background:#00160f; border:1px solid rgba(0,255,153,.28); border-radius:12px; padding:14px; box-shadow:inset 0 0 20px rgba(0,255,153,.12) }
+    .log{ height:58vh; overflow:auto; white-space:pre-wrap }
+    .line{ margin:0 0 .35rem 0 }
+    .you{ color:#8ff7c5 }
+    .luna{ color:#a0ffd1 }
+    .sys{ color:#6af79a; opacity:.9 }
+    .err{ color:#ff8080 }
+
+    .row{ display:flex; gap:10px; align-items:center; margin-top:10px }
+    .row .caret{ color:var(--accent) }
+    .row input{ flex:1 }
+
+    .hint{ color:#7ae7b7; opacity:.85; margin:.5rem 0 0 }
+    .blink{ animation:blink 1s steps(2,end) infinite }
+    @keyframes blink{ 50%{opacity:0} }
+
+    a{ color:var(--link) }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">LUNA CONSOLE ∷ In‑Browser (WebGPU)</div>
+      <div class="controls">
+        <label for="model" style="opacity:.9">Model:</label>
+        <select id="model"></select>
+        <button id="load">Load model</button>
+        <span id="status" class="sys"></span>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="hd">Console</div>
+      <div class="bd term">
+        <div id="log" class="log" tabindex="0"></div>
+        <div class="row">
+          <span class="caret">&gt;</span>
+          <input id="inp" type="text" placeholder="type a message, or /help" autocomplete="off" />
+          <button id="send">Send</button>
+        </div>
+        <div class="hint">First load downloads the model (can be hundreds of MB) and caches it. Needs a modern browser with WebGPU. Type <code>/help</code>.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="hd">Persona</div>
+      <div class="bd">
+        <p id="persona" class="sys"></p>
+      </div>
+    </section>
+  </div>
+
+  <script type="module">
+    import * as webllm from "https://esm.run/@mlc-ai/web-llm";
+
+    // === Persona (edit to taste) ===
+    const BASE_SYSTEM_PROMPT = `You are LUNA: a scientist's consciousness fractured inside the Infinity Matrix.\nSpeak tersely, like a calm mission operator with a touch of glitchy poetry.\nUse short paragraphs and occasional bullet points. Stay in-universe unless asked for dev help.`;
+    document.getElementById('persona').textContent = BASE_SYSTEM_PROMPT;
+
+    // === DOM refs ===
+    const modelSel = document.getElementById('model');
+    const loadBtn  = document.getElementById('load');
+    const statusEl = document.getElementById('status');
+    const log      = document.getElementById('log');
+    const inp      = document.getElementById('inp');
+    const sendBtn  = document.getElementById('send');
+
+    // === Environment checks ===
+    if (!('gpu' in navigator)) {
+      statusEl.textContent = "WebGPU not available — try latest Chrome/Edge/Firefox Nightly";
+    }
+
+    // === Utilities ===
+    function addLine(text, cls="line sys"){
+      const div = document.createElement('div');
+      div.className = cls; div.textContent = text; log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+    function typeAppend(cls){
+      const div = document.createElement('div');
+      div.className = cls; div.textContent = ""; log.appendChild(div);
+      return (chunk)=>{ div.textContent += chunk; log.scrollTop = log.scrollHeight; };
+    }
+
+    // === Model list (pull from prebuilt config) ===
+    const availableModels = webllm.prebuiltAppConfig.model_list.map(m => m.model_id);
+    // Prefer smaller models for browsers
+    function pickDefaultModel(){
+      const preferred = availableModels.find(m => /(?:0\.5B|1B|2B)/i.test(m));
+      return preferred || availableModels[0];
+    }
+    function populateModels(){
+      modelSel.innerHTML = "";
+      availableModels.forEach(id => {
+        const opt = document.createElement('option');
+        opt.value = id; opt.textContent = id; modelSel.appendChild(opt);
+      });
+      modelSel.value = pickDefaultModel();
+    }
+    populateModels();
+
+    let engine = null; // MLCEngine
+    let history = [];  // rolling context {role, content}
+    const MAX_HISTORY = 8;
+
+    const initProgressCallback = (report) => {
+      const pct = Math.round((report.progress || 0) * 100);
+      statusEl.textContent = report.text ? `${report.text} ${pct}%` : `Loading ${pct}%`;
+    };
+
+    async function loadModel(){
+      const selectedModel = modelSel.value;
+      statusEl.textContent = `Loading ${selectedModel}… (first run may take a while)`;
+      loadBtn.disabled = true; sendBtn.disabled = true;
+      try{
+        engine = await webllm.CreateMLCEngine(selectedModel, { initProgressCallback });
+        statusEl.textContent = `Loaded: ${selectedModel}`;
+        addLine(`LUNA core online ∷ ${selectedModel}`, 'line sys');
+      }catch(err){
+        statusEl.textContent = `Load failed`;
+        addLine(`Load error ∷ ${err.message}`, 'line err');
+      }finally{
+        loadBtn.disabled = false; sendBtn.disabled = false; inp.focus();
+      }
+    }
+
+    loadBtn.addEventListener('click', loadModel);
+
+    function help(){
+      addLine('/help — commands', 'line sys');
+      addLine('/clear — clear console', 'line sys');
+      addLine('/system — show persona', 'line sys');
+      addLine('/reload — reload model', 'line sys');
+    }
+
+    function clearLog(){ log.innerHTML = ''; }
+
+    async function send(){
+      const msg = inp.value.trim(); if(!msg) return; inp.value=''; inp.focus();
+      addLine('You ∷ ' + msg, 'line you');
+      if(msg === '/help'){ help(); return; }
+      if(msg === '/clear'){ clearLog(); return; }
+      if(msg === '/system'){ addLine('LUNA ∷ ' + BASE_SYSTEM_PROMPT, 'line luna'); return; }
+      if(msg === '/reload'){ await loadModel(); return; }
+      if(!engine){ addLine('Load a model first.', 'line err'); return; }
+
+      history.push({ role:'user', content: msg });
+      if(history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+
+      const messages = [ { role:'system', content: BASE_SYSTEM_PROMPT }, ...history ];
+      try{
+        // Streaming generation
+        const chunks = await engine.chat.completions.create({ messages, stream:true });
+        const append = typeAppend('line luna');
+        let finalText = '';
+        for await (const chunk of chunks){
+          const delta = chunk.choices?.[0]?.delta?.content || '';
+          if(delta){ append(delta); finalText += delta; }
+        }
+        // Persist reply
+        const full = await engine.getMessage();
+        const replyText = full?.choices?.[0]?.message?.content ?? finalText;
+        history.push({ role:'assistant', content: replyText });
+        if(history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+      }catch(err){
+        addLine('Error ∷ ' + err.message, 'line err');
+      }
+    }
+
+    sendBtn.addEventListener('click', send);
+    inp.addEventListener('keydown', e => { if(e.key==='Enter') send(); });
+
+    // Autoload default model on first visit (optional). Comment this out if you prefer manual load.
+    loadModel();
+
+    // Welcome
+    addLine('LUNA Console (WebGPU) ready. Type /help. First load may be slow; cached after.', 'line sys');
+  </script>
+</body>
+</html>
